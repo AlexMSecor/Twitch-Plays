@@ -1,0 +1,4 @@
+{
+    "duration": 60,
+    "controls": ["left", "right", "up", "down"]
+}

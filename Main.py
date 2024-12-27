@@ -1,3 +1,4 @@
+# TODO: Clean up imports
 import socket
 from dotenv import load_dotenv
 import os
@@ -7,13 +8,13 @@ import time
 import itertools
 import threading
 import keyboard
+import json
 
 # Constants
 DEFAULT_DURATION_TIME = 60
+DEFAULT_CONTROLS = ["left", "right", "up", "down"]
 TWITCH_SERVER = 'irc.chat.twitch.tv'
 TWITCH_PORT = 6667
-# TODO: Think about separating this and the time duration into a separate file
-AVAILABLE_KEYS = ["left", "right", "up", "down"]
 
 # Load environment variables from .env file
 def load_environment_variables():
@@ -32,12 +33,12 @@ def connect_to_twitch(server, port, nickname, token, channel):
     return sock
 
 # Loading animation function
-def loading_animation(event):
+def loading_animation(event, available_controls_length):
     loading_states = itertools.cycle([".", "..", "..."])
     while not event.is_set():
-        print(f"\rGetting top {len(AVAILABLE_KEYS)} words{next(loading_states)}", end = "")
+        print(f"\rGetting top {available_controls_length} words{next(loading_states)}", end = "")
         time.sleep(0.5)
-    print(f"\rGetting top {len(AVAILABLE_KEYS)} words... Done!")
+    print(f"\rGetting top {available_controls_length} words... Done!")
 
 # Continuously reads messages from Twitch chat and executes actions for words in the control_map
 def handle_realtime_actions(sock, control_map):
@@ -60,7 +61,8 @@ def handle_realtime_actions(sock, control_map):
         print("\nStopped listening for messages.")
 
 # Function to collect words and update DataFrame
-def collect_words(sock, duration = DEFAULT_DURATION_TIME):
+def collect_words(sock, available_controls_length, duration = None):
+    duration = duration or DEFAULT_DURATION_TIME
     word_df = pd.DataFrame(columns=["word", "count"])
     end_time = time.time() + duration
     while time.time() < end_time:
@@ -76,54 +78,72 @@ def collect_words(sock, duration = DEFAULT_DURATION_TIME):
                         word_df = pd.concat([word_df, pd.DataFrame({"word": [word], "count": [1]})], ignore_index = True)
 
     # Sort by count and get the top 5 words
-    return word_df.sort_values(by = "count", ascending = False).head(len(AVAILABLE_KEYS))
+    return word_df.sort_values(by = "count", ascending = False).head(available_controls_length)
 
-def create_control_map(top_words):
+def create_control_map(top_words, available_controls):
     control_map = {}
-    for word, key in zip(top_words, AVAILABLE_KEYS):
+    for word, key in zip(top_words, available_controls):
         control_map[word] = key
     return control_map
 
+def load_settings():
+    with open("settings.json", "r") as file:
+        settings = json.load(file)
+    return {
+        "duration": settings.get("duration", DEFAULT_DURATION_TIME),
+        "controls": settings.get("controls", DEFAULT_CONTROLS)
+    }
+
 # Main function
 def main():
-    nickname, token = load_environment_variables()
-    channel = '#' + input("Enter the channel name: ").strip()
-    sock = connect_to_twitch(TWITCH_SERVER, TWITCH_PORT, nickname, token, channel)
+    try:
+        # Load settings.json file
+        duration, available_controls = load_settings().values()
 
-    # Event to control the loading animation
-    stop_event = threading.Event()
-    # Start the loading animation in a separate thread
-    loading_thread = threading.Thread(target = loading_animation, args = (stop_event,))
-    loading_thread.start()
+        # Get Twitch credentials to connect to the chat
+        nickname, token = load_environment_variables()
+        channel = '#' + input("Enter the channel name: ").strip()
+        sock = connect_to_twitch(TWITCH_SERVER, TWITCH_PORT, nickname, token, channel)
 
-    # Collect words for the specified duration
-    word_df = collect_words(sock, 180)
+        # Event to control the loading animation
+        stop_event = threading.Event()
+        # Start the loading animation in a separate thread
+        loading_thread = threading.Thread(target = loading_animation, args = (stop_event,len(available_controls),))
+        loading_thread.start()
 
-    # Stop the loading animation
-    stop_event.set()
-    loading_thread.join()
+        # Collect words for the specified duration
+        if duration == 0:
+            word_df = collect_words(sock, len(available_controls))
+        else:
+            word_df = collect_words(sock, len(available_controls), duration)
 
-    # Display the results
-    print(f"\n=== Top {len(AVAILABLE_KEYS)} Words Collected ===")
-    print(word_df.reset_index(drop = True))
+        # Stop the loading animation
+        stop_event.set()
+        loading_thread.join()
 
-    # Create a word map with actions
-    control_map = create_control_map(word_df["word"].tolist()[:len(AVAILABLE_KEYS)])
+        # Display the results
+        print(f"\n=== Top {len(available_controls)} Words Collected ===")
+        print(word_df.reset_index(drop = True))
 
-    # Display the word map
-    print("\n=== Control Map ===")
-    print(f"Generated control map: {control_map}")
+        # Create a word map with actions
+        control_map = create_control_map(word_df["word"].tolist()[:len(available_controls)], available_controls)
 
-    print("Load the game and press 'Enter' to start listening for messages.")
-    input()
+        # Display the word map
+        print("\n=== Control Map ===")
+        print(f"Generated control map: {control_map}")
 
-    print("Switch to the game window!")
-    # Five seconds delay to switch to the game window
-    time.sleep(5)
+        print("Load the game and press 'Enter' to start listening for messages.")
+        input()
 
-    # Start listening for messages and execute actions
-    # TODO: This stops after so long, need to find a way to keep it running
-    handle_realtime_actions(sock, control_map)
+        print("Switch to the game window!")
+        # Five seconds delay to switch to the game window
+        time.sleep(5)
+
+        # Start listening for messages and execute actions
+        # TODO: This stops after so long, need to find a way to keep it running
+        handle_realtime_actions(sock, control_map)
+    except Exception as e:
+        print("An error occurred: ", e)
 
 # Entry point
 if __name__ == "__main__":
